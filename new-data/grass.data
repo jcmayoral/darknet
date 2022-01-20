@@ -1,0 +1,4 @@
+train=/content/PyTorch_YOLOv4/4grass-v3-colab/new_train.txt
+valid=/content/PyTorch_YOLOv4/4grass-v3-colab/new_valid.txt
+classes=4
+names=/content/PyTorch_YOLOv4/data/grass.names 
