@@ -125,6 +125,7 @@ void train_detector(char *datacfg, char *cfgfile, char *weightfile, int *gpus, i
     iter_save_last = get_current_iteration(net);
     iter_map = get_current_iteration(net);
     float mean_average_precision = -1;
+    float mean_jose_precision = 0.5;
     float best_map = mean_average_precision;
 
     load_args args = { 0 };
@@ -386,6 +387,8 @@ void train_detector(char *datacfg, char *cfgfile, char *weightfile, int *gpus, i
             if (cur_con_acc >= 0) avg_contrastive_acc = avg_contrastive_acc*0.99 + cur_con_acc * 0.01;
             printf("  avg_contrastive_acc = %f \n", avg_contrastive_acc);
         }
+        //draw_train_loss(windows_name, img, img_size, avg_loss, max_img_loss, iteration, net.max_batches, mean_jose_precision, draw_precision, "Risl%", avg_contrastive_acc / 100, dont_show, mjpeg_port, avg_time);
+
         draw_train_loss(windows_name, img, img_size, avg_loss, max_img_loss, iteration, net.max_batches, mean_average_precision, draw_precision, "mAP%", avg_contrastive_acc / 100, dont_show, mjpeg_port, avg_time);
 #endif    // OPENCV
 
@@ -1033,6 +1036,8 @@ float validate_detector_map(char *datacfg, char *cfgfile, char *weightfile, floa
 
     int* truth_classes_count = (int*)xcalloc(classes, sizeof(int));
 
+    int ERRORS[4][4] = {0,0,0,0,0,0,0,0,0,0,0,0,0,0};
+
     // For multi-class precision and recall computation
     float *avg_iou_per_class = (float*)xcalloc(classes, sizeof(float));
     int *tp_for_thresh_per_class = (int*)xcalloc(classes, sizeof(int));
@@ -1085,6 +1090,7 @@ float validate_detector_map(char *datacfg, char *cfgfile, char *weightfile, floa
             char labelpath[4096];
             replace_image_to_label(path, labelpath);
             int num_labels = 0;
+            //ground truth
             box_label *truth = read_boxes(labelpath, &num_labels);
             int j;
             for (j = 0; j < num_labels; ++j) {
@@ -1112,6 +1118,7 @@ float validate_detector_map(char *datacfg, char *cfgfile, char *weightfile, floa
                 int class_id;
                 for (class_id = 0; class_id < classes; ++class_id) {
                     float prob = dets[i].prob[class_id];
+                    //objectiveness
                     if (prob > 0) {
                         detections_count++;
                         detections = (box_prob*)xrealloc(detections, detections_count * sizeof(box_prob));
@@ -1124,15 +1131,20 @@ float validate_detector_map(char *datacfg, char *cfgfile, char *weightfile, floa
 
                         int truth_index = -1;
                         float max_iou = 0;
+                        //num_labels total labels
                         for (j = 0; j < num_labels; ++j)
                         {
                             box t = { truth[j].x, truth[j].y, truth[j].w, truth[j].h };
                             //printf(" IoU = %f, prob = %f, class_id = %d, truth[j].id = %d \n",
                             //    box_iou(dets[i].bbox, t), prob, class_id, truth[j].id);
                             float current_iou = box_iou(dets[i].bbox, t);
+
+                            //if iuo > iou_thresh and class are same
+
                             if (current_iou > iou_thresh && class_id == truth[j].id) {
                                 if (current_iou > max_iou) {
                                     max_iou = current_iou;
+                                    //count + 1 correct detections
                                     truth_index = unique_truth_count + j;
                                 }
                             }
@@ -1143,6 +1155,7 @@ float validate_detector_map(char *datacfg, char *cfgfile, char *weightfile, floa
                             detections[detections_count - 1].truth_flag = 1;
                             detections[detections_count - 1].unique_truth_index = truth_index;
                         }
+                        //remove object is iou is low or class is wrong
                         else {
                             // if object is difficult then remove detection
                             for (j = 0; j < num_labels_dif; ++j) {
@@ -1157,6 +1170,9 @@ float validate_detector_map(char *datacfg, char *cfgfile, char *weightfile, floa
 
                         // calc avg IoU, true-positives, false-positives for required Threshold
                         if (prob > thresh_calc_avg_iou) {
+                            //#JOSE TODO RISK CLASSIFICATION MAYBE HERE
+                            //ERRORS[class_id][truth[j].id]++;
+
                             int z, found = 0;
                             for (z = checkpoint_detections_count; z < detections_count - 1; ++z) {
                                 if (detections[z].unique_truth_index == truth_index) {
@@ -1202,6 +1218,7 @@ float validate_detector_map(char *datacfg, char *cfgfile, char *weightfile, floa
     //for (t = 0; t < nthreads; ++t) {
     //    pthread_join(thr[t], 0);
     //}
+
 
     if ((tp_for_thresh + fp_for_thresh) > 0)
         avg_iou = avg_iou / (tp_for_thresh + fp_for_thresh);
@@ -1392,6 +1409,15 @@ float validate_detector_map(char *datacfg, char *cfgfile, char *weightfile, floa
     printf(" `-points 0` (AUC) for ImageNet, PascalVOC 2010-2012, your custom dataset\n");
     if (reinforcement_fd != NULL) fclose(reinforcement_fd);
 
+    printf("Customized Confussion Matrix\n" );
+    /*
+    for (int i =0; i<=3; i++){
+      for (int j =0; j<=3; j++){
+        printf("%d ",ERRORS[i][j] );
+      }
+      printf("\n");
+    }
+    */
     // free memory
     free_ptrs((void**)names, net.layers[net.n - 1].classes);
     free_list_contents_kvp(options);
@@ -1467,6 +1493,7 @@ void calc_anchors(char *datacfg, int num_of_clusters, int width, int height, int
     printf(" read labels from %d images \n", number_of_images);
 
     int i, j;
+    //for each image
     for (i = 0; i < number_of_images; ++i) {
         char *path = paths[i];
         char labelpath[4096];
@@ -1476,8 +1503,10 @@ void calc_anchors(char *datacfg, int num_of_clusters, int width, int height, int
         box_label *truth = read_boxes(labelpath, &num_labels);
         //printf(" new path: %s \n", labelpath);
         char *buff = (char*)xcalloc(6144, sizeof(char));
+        //for each object in image
         for (j = 0; j < num_labels; ++j)
         {
+            //filter wrong labels
             if (truth[j].x > 1 || truth[j].x <= 0 || truth[j].y > 1 || truth[j].y <= 0 ||
                 truth[j].w > 1 || truth[j].w <= 0 || truth[j].h > 1 || truth[j].h <= 0)
             {
@@ -1500,10 +1529,10 @@ void calc_anchors(char *datacfg, int num_of_clusters, int width, int height, int
             rel_width_height_array[number_of_boxes * 2 - 2] = truth[j].w * width;
             rel_width_height_array[number_of_boxes * 2 - 1] = truth[j].h * height;
             printf("\r loaded \t image: %d \t box: %d", i + 1, number_of_boxes);
-        }
+        }//end for eachobject in image
         free(buff);
         free(truth);
-    }
+    }// end for each image
     printf("\n all loaded. \n");
     printf("\n calculating k-means++ ...");
 
